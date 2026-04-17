@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { DispatchRecord } from "@/lib/parse-excel";
 
 const STATUS_LABELS: Record<DispatchRecord["status"], string> = {
@@ -27,6 +28,17 @@ export default function DispatchTable({
   onUpdate,
   onDelete,
 }: DispatchTableProps) {
+  const [expandedAddr, setExpandedAddr] = useState<Set<string>>(new Set());
+
+  const toggleAddr = (id: string) => {
+    setExpandedAddr((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
   if (records.length === 0) {
     return (
       <div className="text-center py-12 text-gray-400">
@@ -46,7 +58,7 @@ export default function DispatchTable({
             <th className="px-3 py-2 text-left font-medium">目的地</th>
             <th className="px-3 py-2 text-left font-medium">柜号</th>
             <th className="px-3 py-2 text-left font-medium">卡车公司</th>
-            <th className="px-3 py-2 text-left font-medium min-w-[200px]">
+            <th className="px-3 py-2 text-left font-medium w-[200px]">
               地址
             </th>
             <th className="px-3 py-2 text-center font-medium">板数</th>
@@ -61,10 +73,16 @@ export default function DispatchTable({
           </tr>
         </thead>
         <tbody>
-          {records.map((record) => (
+          {records.map((record) => {
+            const isDelivered = record.status === "delivered";
+            const rowClass = isDelivered
+              ? "border-b border-gray-100 bg-gray-50 text-gray-400 opacity-70 hover:opacity-100 hover:bg-gray-100 transition-all"
+              : "border-b border-gray-100 hover:bg-gray-50 transition-colors";
+            const isExpanded = expandedAddr.has(record.id);
+            return (
             <tr
               key={record.id}
-              className="border-b border-gray-100 hover:bg-gray-50 transition-colors"
+              className={rowClass}
             >
               {/* 状态 */}
               <td className="px-3 py-2">
@@ -134,10 +152,19 @@ export default function DispatchTable({
               </td>
 
               {/* 地址 */}
-              <td className="px-3 py-2 text-xs text-gray-600 max-w-[250px]">
-                <div className="line-clamp-3 whitespace-pre-line">
-                  {record.address}
-                </div>
+              <td className="px-3 py-2 text-xs text-gray-600 w-[200px] max-w-[200px] align-top">
+                <button
+                  type="button"
+                  onClick={() => toggleAddr(record.id)}
+                  title={record.address || "—"}
+                  className={
+                    isExpanded
+                      ? "text-left whitespace-pre-line break-words w-full"
+                      : "text-left truncate block w-full hover:text-blue-600 cursor-pointer"
+                  }
+                >
+                  {record.address || "—"}
+                </button>
               </td>
 
               {/* 板数 */}
@@ -213,7 +240,8 @@ export default function DispatchTable({
                 </button>
               </td>
             </tr>
-          ))}
+            );
+          })}
         </tbody>
       </table>
     </div>

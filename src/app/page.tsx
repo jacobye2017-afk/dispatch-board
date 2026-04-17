@@ -4,7 +4,15 @@ import { useState, useEffect, useCallback } from "react";
 import FileUpload from "@/components/FileUpload";
 import DispatchTable from "@/components/DispatchTable";
 import KanbanBoard from "@/components/KanbanBoard";
-import { DispatchRecord } from "@/lib/parse-excel";
+import {
+  DispatchRecord,
+  recordsToLtlRows,
+  recordsToLocalRows,
+  rowsToTsv,
+  rowsToCsv,
+  LTL_HEADERS,
+  LOCAL_HEADERS,
+} from "@/lib/parse-excel";
 import { loadRecords, saveRecords } from "@/lib/store";
 
 type ViewMode = "table" | "kanban";
@@ -16,6 +24,7 @@ export default function Home() {
   const [view, setView] = useState<ViewMode>("table");
   const [tab, setTab] = useState<TabFilter>("all");
   const [search, setSearch] = useState("");
+  const [toast, setToast] = useState("");
 
   useEffect(() => {
     setRecords(loadRecords());
@@ -62,19 +71,75 @@ export default function Home() {
     }
   }, []);
 
-  // 过滤
-  const filtered = records.filter((r) => {
-    if (tab !== "all" && r.method !== tab) return false;
-    if (search) {
-      const q = search.toLowerCase();
-      return (
-        r.containerNo.toLowerCase().includes(q) ||
-        r.destination.toLowerCase().includes(q) ||
-        r.address.toLowerCase().includes(q)
-      );
+  const showToast = useCallback((msg: string) => {
+    setToast(msg);
+    setTimeout(() => setToast(""), 3500);
+  }, []);
+
+  const handleCopy = useCallback(
+    async (kind: "LTL" | "LOCAL") => {
+      const rows = kind === "LTL" ? recordsToLtlRows(records) : recordsToLocalRows(records);
+      if (rows.length === 0) {
+        showToast(`没有 ${kind} 数据可复制`);
+        return;
+      }
+      try {
+        await navigator.clipboard.writeText(rowsToTsv(rows));
+        showToast(`✓ 已复制 ${rows.length} 条 ${kind} 数据，到金山表格按 Ctrl+V 粘贴`);
+      } catch {
+        showToast("复制失败，请检查浏览器权限");
+      }
+    },
+    [records, showToast]
+  );
+
+  const handleExportCsv = useCallback(() => {
+    if (records.length === 0) {
+      showToast("没有数据可导出");
+      return;
     }
-    return true;
-  });
+    const downloadCsv = (filename: string, headers: string[], rows: string[][]) => {
+      const csv = rowsToCsv([headers, ...rows]);
+      // BOM 让 Excel 打开不乱码
+      const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+    };
+
+    const ltl = recordsToLtlRows(records);
+    const local = recordsToLocalRows(records);
+    const today = new Date().toISOString().slice(0, 10);
+    if (ltl.length > 0) downloadCsv(`dispatch_LTL_${today}.csv`, LTL_HEADERS, ltl);
+    if (local.length > 0) downloadCsv(`dispatch_LOCAL_${today}.csv`, LOCAL_HEADERS, local);
+    showToast(`✓ 已导出 LTL ${ltl.length} 条、LOCAL ${local.length} 条`);
+  }, [records, showToast]);
+
+  // 状态排序顺序：待派送 → 已预约 → 派送中 → 已签收（底部）
+  const STATUS_ORDER: Record<DispatchRecord["status"], number> = {
+    pending: 0,
+    scheduled: 1,
+    in_transit: 2,
+    delivered: 3,
+  };
+
+  const filtered = records
+    .filter((r) => {
+      if (tab !== "all" && r.method !== tab) return false;
+      if (search) {
+        const q = search.toLowerCase();
+        return (
+          r.containerNo.toLowerCase().includes(q) ||
+          r.destination.toLowerCase().includes(q) ||
+          r.address.toLowerCase().includes(q)
+        );
+      }
+      return true;
+    })
+    .sort((a, b) => STATUS_ORDER[a.status] - STATUS_ORDER[b.status]);
 
   // 统计
   const stats = {
@@ -178,12 +243,36 @@ export default function Home() {
             </div>
 
             {records.length > 0 && (
-              <button
-                onClick={handleClearAll}
-                className="text-xs text-gray-400 hover:text-red-500 px-2 py-1"
-              >
-                清空
-              </button>
+              <>
+                <div className="w-px h-6 bg-gray-200 mx-1" />
+                <button
+                  onClick={() => handleCopy("LTL")}
+                  className="text-sm px-3 py-1.5 rounded-md bg-purple-600 hover:bg-purple-700 text-white font-medium transition-colors"
+                  title="复制 LTL 数据（TSV 格式），在金山表格按 Ctrl+V 粘贴"
+                >
+                  📋 复制 LTL ({stats.ltl})
+                </button>
+                <button
+                  onClick={() => handleCopy("LOCAL")}
+                  className="text-sm px-3 py-1.5 rounded-md bg-teal-600 hover:bg-teal-700 text-white font-medium transition-colors"
+                  title="复制 LOCAL 数据（TSV 格式），在金山表格按 Ctrl+V 粘贴"
+                >
+                  📋 复制 LOCAL ({stats.local})
+                </button>
+                <button
+                  onClick={handleExportCsv}
+                  className="text-sm px-3 py-1.5 rounded-md bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 font-medium transition-colors"
+                  title="导出为 CSV 文件（LTL + LOCAL 两个文件）"
+                >
+                  💾 导出 CSV
+                </button>
+                <button
+                  onClick={handleClearAll}
+                  className="text-xs text-gray-400 hover:text-red-500 px-2 py-1"
+                >
+                  清空
+                </button>
+              </>
             )}
           </div>
         </div>
@@ -203,6 +292,12 @@ export default function Home() {
           )}
         </div>
       </main>
+
+      {toast && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-gray-900 text-white text-sm px-4 py-2.5 rounded-lg shadow-lg z-50 animate-in fade-in slide-in-from-bottom-4">
+          {toast}
+        </div>
+      )}
     </div>
   );
 }

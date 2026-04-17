@@ -60,13 +60,22 @@ function findHeaderRow(
   return -1;
 }
 
+// 关键字匹配模式
+//   "exact:NO" → 完全匹配 "NO"（不会命中 NOTES / NO. / NORTH）
+//   "NO"       → 包含匹配（旧行为，兼容）
 function getColIndex(
   headerRow: (string | number | null)[],
   ...keywords: string[]
 ): number {
   for (let i = 0; i < headerRow.length; i++) {
     const val = String(headerRow[i] || "").toUpperCase().trim();
-    if (keywords.some((k) => val.includes(k))) return i;
+    for (const k of keywords) {
+      if (k.startsWith("exact:")) {
+        if (val === k.slice(6).toUpperCase()) return i;
+      } else if (val.includes(k.toUpperCase())) {
+        return i;
+      }
+    }
   }
   return -1;
 }
@@ -166,7 +175,8 @@ export function parseExcelBuffer(buffer: ArrayBuffer): DispatchRecord[] {
   const colCode = getColIndex(header, "CODE", "仓库");
   const colAddr = getColIndex(header, "ADDRESS", "地址");
   const colShipId = getColIndex(header, "SHIP", "分货");
-  const colNo = getColIndex(header, "NO");
+  // "NO" 列严格完全匹配，避免命中 NOTES / NO. / NORTH 等
+  const colNo = getColIndex(header, "exact:NO");
 
   if (colMethod === -1 || colCtns === -1 || colCbm === -1 || colCode === -1)
     return [];
@@ -264,4 +274,73 @@ export function parseExcelBuffer(buffer: ArrayBuffer): DispatchRecord[] {
   }
 
   return results;
+}
+
+// ========== 导出 / 复制 ==========
+
+// LTL 13 列（对齐金山表格）：提货时间 / 目的地 / 柜号 / 卡车公司 / 地址 / 板数 /
+// 箱子数 / 成本价 / 总报价 / 港前报价 / PRO# / 系统批次号 / 备注
+export function recordsToLtlRows(records: DispatchRecord[]): string[][] {
+  return records
+    .filter((r) => r.method === "LTL")
+    .map((r) => [
+      r.pickupDate,
+      r.destination,
+      r.containerNo,
+      r.truckCompany,
+      r.address.replace(/\n/g, " "),
+      String(r.pallets),
+      String(r.cartons),
+      r.costPrice,
+      r.totalQuote,
+      "",
+      r.proNumber,
+      "",
+      `根据ai分析：${r.aiHint}，详情请看派单！`,
+    ]);
+}
+
+// LOCAL 9 列：日期 / Destination / 柜号 / Carrier / 地址 / 板数 / 箱数 /
+// 系统批次号 / 备注
+export function recordsToLocalRows(records: DispatchRecord[]): string[][] {
+  return records
+    .filter((r) => r.method === "LOCAL")
+    .map((r) => [
+      r.pickupDate,
+      r.destination,
+      r.containerNo,
+      r.truckCompany,
+      r.address.replace(/\n/g, " "),
+      String(r.pallets),
+      String(r.cartons),
+      "",
+      `根据ai分析：${r.aiHint}，详情请看派单！`,
+    ]);
+}
+
+export const LTL_HEADERS = [
+  "提货时间", "目的地", "柜号", "卡车公司", "地址", "板数", "箱子数",
+  "成本价", "总报价", "港前报价", "PRO#", "系统批次号", "备注",
+];
+
+export const LOCAL_HEADERS = [
+  "日期", "Destination", "柜号", "Carrier", "地址", "板数", "箱数",
+  "系统批次号", "备注",
+];
+
+// TSV：Tab 分隔，便于粘贴到表格软件（金山/Excel/Google Sheets）
+export function rowsToTsv(rows: string[][]): string {
+  return rows.map((row) => row.join("\t")).join("\n");
+}
+
+// CSV：符合 RFC 4180 的字段转义（含逗号/引号/换行的字段用双引号包裹，内部双引号翻倍）
+function csvEscape(cell: string): string {
+  if (/[",\n\r]/.test(cell)) {
+    return `"${cell.replace(/"/g, '""')}"`;
+  }
+  return cell;
+}
+
+export function rowsToCsv(rows: string[][]): string {
+  return rows.map((row) => row.map(csvEscape).join(",")).join("\r\n");
 }
