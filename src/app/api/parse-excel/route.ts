@@ -39,7 +39,7 @@ export async function POST(request: NextRequest) {
 
   try {
     const buffer = await file.arrayBuffer();
-    const records = parseExcelBuffer(buffer);
+    const records = await parseExcelBuffer(buffer);
 
     if (records.length === 0) {
       return NextResponse.json(
